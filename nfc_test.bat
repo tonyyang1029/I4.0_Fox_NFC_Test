@@ -32,7 +32,7 @@ set LANG=en_US.UTF-8
 set LC_ALL=en_US.UTF-8
 
 :: Set the total number of test cycles to run before the script exits.
-set "MAX_CYCLES=300"
+set "MAX_CYCLES=100"
 
 :: Initialize a counter for the loop
 set "LOOP_COUNT=0"
@@ -58,9 +58,19 @@ echo [%time%] Device connected.
 adb root
 echo [%time%] Device rooted.
 
-:: --- STEP 1: NFC State Check and Toggle ---
+:: --- STEP 1: Logcat Capture ---
 echo.
-echo [%time%] [Step 1/3] Checking NFC state...
+echo [%time%] [Step 1/4] Capturing logcat...
+set "LOG_FILENAME=nfc_log_run_%LOOP_COUNT%_%date:~0,4%%date:~5,2%%date:~8,2%-%time:~0,2%%time:~3,2%%time:~6,2%.txt"
+echo [%time%] Log file will be saved as: %LOG_FILENAME%
+
+echo [%time%] Starting logcat capture directly to PC...
+:: Start adb logcat in a new background process, redirecting its output to the file.
+start "ADBCapture" /B adb logcat -b all > "%LOG_FILENAME%"
+
+:: --- STEP 2: NFC State Check and Toggle ---
+echo.
+echo [%time%] [Step 2/4] Checking NFC state...
 set "NFC_STATE="
 for /f "tokens=2 delims==" %%a in ('adb shell dumpsys nfc ^| findstr /c:"mState="') do set "NFC_STATE=%%a"
 
@@ -81,7 +91,7 @@ if "%NFC_STATE%"=="off" (
     ) else (
         echo [%time%] FAILED: Could not turn NFC ON.
         set "RESULT=0"
-        goto logging
+        goto stop_logging
     )
 
     :: Wait 5 seconds
@@ -101,7 +111,7 @@ if "%NFC_STATE%"=="off" (
     ) else (
         echo [%time%] FAILED: Could not turn NFC OFF.
         set "RESULT=0"
-        goto logging
+        goto stop_logging
     )
 ) else if "%NFC_STATE%"=="on" (
     echo [%time%] NFC is already ON. Skipping the toggle test for this cycle.
@@ -109,21 +119,10 @@ if "%NFC_STATE%"=="off" (
     echo [%time%] Could not determine NFC state. Skipping.
 )
 
-:: --- STEP 2: Logcat Capture ---
-:logging
+:: --- STEP 3: Stop Logcat Capture ---
+:stop_logging
 echo.
-echo [%time%] [Step 2/3] Capturing logcat for 1 minute...
-set "LOG_FILENAME=nfc_log_run_%LOOP_COUNT%_%date:~0,4%%date:~5,2%%date:~8,2%-%time:~0,2%%time:~3,2%%time:~6,2%.txt"
-echo [%time%] Log file will be saved as: %LOG_FILENAME%
-
-echo [%time%] Starting logcat capture directly to PC...
-:: Start adb logcat in a new background process, redirecting its output to the file.
-start "ADBCapture" /B adb logcat -b all > "%LOG_FILENAME%"
-
-echo [%time%] Logging for 60 seconds...
-timeout /t 60 /nobreak >nul
-
-echo [%time%] Stopping logcat capture...
+echo [%time%] [Step 3/4] Stopping logcat capture...
 :: Killing the adb.exe process will stop the logcat stream.
 :: This is a forceful method but effective for this script's purpose.
 taskkill /IM adb.exe /F >nul 2>nul
@@ -135,17 +134,6 @@ if %RESULT% EQU 0 (
     goto :end
 )
 
-:: --- STEP 3: Reboot Device ---
-echo.
-echo [%time%] [Step 3/3] Rebooting device...
-adb reboot
-
-echo [%time%] Waiting for device to come back online (this can take several minutes)...
-timeout /t 60 /nobreak >nul
-adb wait-for-device
-echo [%time%] Device is online. Waiting 1 minute for system to stabilize...
-timeout /t 60 /nobreak >nul
-
 :: Check if the loop has run the maximum number of times
 if %LOOP_COUNT% GEQ %MAX_CYCLES% (
     echo.
@@ -153,6 +141,18 @@ if %LOOP_COUNT% GEQ %MAX_CYCLES% (
     timeout /t 5 >nul
     goto :end
 )
+
+:: --- STEP 4: Reboot Device ---
+echo.
+echo [%time%] [Step 4/4] Rebooting device...
+adb reboot
+adb kill-server
+
+echo [%time%] Waiting for device to come back online (this can take several minutes)...
+timeout /t 30 /nobreak >nul
+adb wait-for-device
+echo [%time%] Device is online. Waiting 30 seconds for system to stabilize...
+timeout /t 30 /nobreak >nul
 
 echo [%time%] Cycle complete. Restarting process...
 echo.
