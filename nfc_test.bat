@@ -34,6 +34,9 @@ set "NFC_VERIFY_TIMEOUT=10"
 :: Initialize a counter for the loop
 set "LOOP_COUNT=0"
 
+:: Skip rooting device
+set "SKIP_ROOT=1"
+
 :: --- Subroutine Prototypes (for readability) ---
 goto :main
 
@@ -53,6 +56,8 @@ echo ===========================================================================
 echo [%time%] Waiting for device to be connected...
 adb wait-for-device
 echo [%time%] Device connected.
+
+if %SKIP_ROOT% EQU 1 goto skip_root
 adb root
 timeout /t 5 /nobreak >nul
 echo [%time%] Checking root access...
@@ -63,6 +68,7 @@ if /i "!WHOAMI!" NEQ "root" (
     goto :end
 )
 echo [%time%] Root access confirmed.
+:skip_root
 
 :: --- STEP 1: Logcat Capture ---
 echo.
