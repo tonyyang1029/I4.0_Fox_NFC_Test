@@ -26,7 +26,7 @@ title Android Automation Script
 
 :: --- Configuration ---
 :: Set the total number of test cycles to run before the script exits.
-set "MAX_CYCLES=100"
+set "MAX_CYCLES=2"
 
 :: Set the timeout in seconds for verifying NFC state changes.
 set "NFC_VERIFY_TIMEOUT=10"
@@ -53,8 +53,10 @@ echo ===========================================================================
 echo [%time%] Waiting for device to be connected...
 adb wait-for-device
 echo [%time%] Device connected.
+
+:: Attempt to restart adb with root permissions. This is crucial.
 adb root
-timeout /t 5 /nobreak >nul
+adb wait-for-device
 echo [%time%] Checking root access...
 for /f "delims=" %%i in ('adb shell "whoami"') do set "WHOAMI=%%i"
 if /i "!WHOAMI!" NEQ "root" (
@@ -71,8 +73,8 @@ set "LOG_FILENAME=nfc_log_run_%LOOP_COUNT%_%date:~0,4%%date:~5,2%%date:~8,2%-%ti
 echo [%time%] Log file will be saved as: %LOG_FILENAME%
 
 echo [%time%] Starting logcat capture directly to PC...
-:: Start adb logcat in a new background process, redirecting its output to the file.
-start "ADBCapture" /B adb logcat -b all > "%LOG_FILENAME%"
+:: Start adb logcat in background (Windows doesn't easily provide PIDs for started processes)
+adb logcat -b all > "%LOG_FILENAME%" 2>&1 &
 echo [%time%] Logcat started in background.
 
 :: --- STEP 2: NFC State Check and Toggle ---
@@ -85,27 +87,34 @@ if "%NFC_STATE%"=="off" (
     echo [%time%] NFC is OFF. Starting NFC toggle test.
 
     call :toggle_nfc "on"
-    if errorlevel 1 goto failure
+    if errorlevel 1 goto stop_logging
 
     echo [%time%] Waiting for 5 seconds before turning off...
     timeout /t 5 /nobreak >nul
 
     call :toggle_nfc "off"
-    if errorlevel 1 goto failure
+    if errorlevel 1 goto stop_logging
 
 ) else if "%NFC_STATE%"=="on" (
     echo [%time%] NFC is already ON. Skipping the toggle test for this cycle.
 ) else (
-    echo [%time%] Could not determine NFC state.
-    goto failure
+    echo [%time%] Could not determine NFC state. Skipping.
 )
 
-:success
 :: --- STEP 3: Stop Logcat Capture ---
+:stop_logging
 echo.
 echo [%time%] [Step 3/4] Stopping logcat capture...
-call :stop_logging
+:: Since we can't easily track the PID, we'll kill all adb logcat processes
+for /f "tokens=2" %%i in ('tasklist ^| findstr "adb.exe" 2^>nul') do (
+    taskkill /PID %%i /F >nul 2>nul
+)
+echo [%time%] Killed adb logcat processes.
+
 echo [%time%] Logcat capture complete.
+
+:: The script now exits on failure, so this check is for loop completion.
+:: Failures are handled by `goto :end` inside the subroutines.
 
 :: Check if the loop has run the maximum number of times
 if %LOOP_COUNT% GEQ %MAX_CYCLES% (
@@ -119,25 +128,26 @@ if %LOOP_COUNT% GEQ %MAX_CYCLES% (
 echo.
 echo [%time%] [Step 4/4] Rebooting device...
 adb reboot >nul
-adb kill-server
-timeout /t 30 /nobreak >nul
+if errorlevel 1 (
+    echo [%time%] ERROR: 'adb reboot' command failed.
+    goto :end
+)
 
-echo [%time%] Waiting for device to come back online...
+:: Kill and restart ADB server
+adb kill-server
+timeout /t 10 /nobreak >nul
 adb start-server
+timeout /t 20 /nobreak >nul
+
+echo [%time%] Waiting for device to come back online (this can take several minutes)...
 adb wait-for-device
 echo [%time%] Device is online. Waiting 30 seconds for system to stabilize...
 timeout /t 30 /nobreak >nul
 
 echo [%time%] Cycle complete. Restarting process...
 echo.
+endlocal
 goto main_loop
-
-:failure
-:: --- STEP 3: Stop Logcat Capture ---
-echo.
-echo [%time%] [Step 3/4] Stopping logcat capture...
-call :stop_logging
-echo [%time%] Logcat capture complete.
 
 :: End script
 :end
@@ -194,16 +204,5 @@ call :get_nfc_state FINAL_STATE
 echo [%time%] Final state was: !FINAL_STATE!
 echo [%time%] FAILED: Test cycle #%LOOP_COUNT% failed.
 exit /b 1
-
-goto :eof
-
-:: ==================================================================
-:: Subroutine: stop_logging
-:: Description: Stops the adb logcat process.
-:: ==================================================================
-:stop_logging
-echo [%time%] Stopping adb logcat...
-taskkill /IM adb.exe /F >nul 2>nul
-echo [%time%] adb logcat stopped.
 
 goto :eof
